@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
 
 import aioboto3
-from boto3.dynamodb.conditions import Key, Attr
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
@@ -26,6 +26,7 @@ from .utils import (
     create_checkpoint_item,
     create_write_item,
     execute_with_retry,
+    make_key,
     validate_checkpoint_item,
     validate_write_item,
 )
@@ -85,71 +86,62 @@ class AsyncDynamoDBSaver(BaseCheckpointSaver):
         checkpoint_id = get_checkpoint_id(config)
 
         try:
+            # Get checkpoint
             if checkpoint_id:
-                # Query both checkpoint and writes in one operation
-                prefix = f"{checkpoint_ns}#{checkpoint_id}"
-                response = await self._table.query(
-                    KeyConditionExpression=Key("PK").eq(thread_id)
-                    & Key("SK").begins_with(prefix),
-                    ConsistentRead=True,
+                # Get specific checkpoint
+                key = make_key(thread_id, checkpoint_ns, checkpoint_id)
+                response = await execute_with_retry(
+                    lambda: self._table.get_item(Key=key, ConsistentRead=True),
+                    self.config,
+                    "Failed to get checkpoint",
                 )
-
-                items = response.get("Items", [])
-                if not items:
+                item = response.get("Item")
+                if not item:
                     return None
-
-                # Separate and validate checkpoint and writes
-                checkpoint_item = None
-                writes = []
-                for item in items:
-                    try:
-                        if item["SK"].endswith("#checkpoint"):
-                            checkpoint_item = validate_checkpoint_item(item)
-                        elif "#write#" in item["SK"]:
-                            writes.append(validate_write_item(item))
-                    except DynamoDBValidationError as e:
-                        logger.error(f"Invalid item found: {e}")
-                        continue
-
-                if not checkpoint_item:
+                try:
+                    checkpoint_item = validate_checkpoint_item(item)
+                except DynamoDBValidationError as e:
+                    logger.error(f"Invalid checkpoint item: {e}")
                     return None
-
             else:
-                # Get latest checkpoint with validation
-                response = await self._table.query(
-                    KeyConditionExpression=Key("PK").eq(thread_id)
-                    & Key("SK").begins_with(f"{checkpoint_ns}#"),
-                    FilterExpression=Attr("SK").contains("#checkpoint"),
-                    ScanIndexForward=False,
-                    Limit=1,
-                    ConsistentRead=True,
+                # Get latest checkpoint
+                response = await execute_with_retry(
+                    lambda: self._table.query(
+                        KeyConditionExpression=Key("PK").eq(thread_id)
+                        & Key("SK").begins_with(f"{checkpoint_ns}#checkpoint#"),
+                        ScanIndexForward=False,
+                        Limit=1,
+                        ConsistentRead=True,
+                    ),
+                    self.config,
+                    "Failed to get latest checkpoint",
                 )
-
                 if not response["Items"]:
                     return None
-
                 try:
                     checkpoint_item = validate_checkpoint_item(response["Items"][0])
                 except DynamoDBValidationError as e:
-                    logger.error(f"Invalid checkpoint item found: {e}")
+                    logger.error(f"Invalid checkpoint item: {e}")
                     return None
 
-                # Get and validate writes
-                write_prefix = (
-                    f"{checkpoint_ns}#{checkpoint_item['checkpoint_id']}#write#"
-                )
-                writes_response = await self._table.query(
+            # Get writes for the checkpoint
+            write_prefix = f"{checkpoint_ns}#write#{checkpoint_item['checkpoint_id']}"
+            writes_response = await execute_with_retry(
+                lambda: self._table.query(
                     KeyConditionExpression=Key("PK").eq(thread_id)
                     & Key("SK").begins_with(write_prefix)
-                )
+                ),
+                self.config,
+                "Failed to get writes",
+            )
 
-                writes = []
-                for item in writes_response.get("Items", []):
-                    try:
-                        writes.append(validate_write_item(item))
-                    except DynamoDBValidationError as e:
-                        logger.error(f"Invalid write item found: {e}")
-                        continue
+            writes = []
+            for write_item in writes_response.get("Items", []):
+                try:
+                    writes.append(validate_write_item(write_item))
+                except DynamoDBValidationError as e:
+                    logger.error(f"Invalid write item: {e}")
+                    continue
 
             # Process validated writes
             pending_writes = [
@@ -161,24 +153,6 @@ class AsyncDynamoDBSaver(BaseCheckpointSaver):
                 for write in writes
             ]
 
-            # Build checkpoint tuple from validated item
-            checkpoint = self.serde.loads_typed(
-                (checkpoint_item["type"], checkpoint_item["checkpoint"])
-            )
-            metadata = self.serde.loads_typed(
-                (checkpoint_item["type"], checkpoint_item["metadata"])
-            )
-
-            parent_config = None
-            if parent_id := checkpoint_item.get("parent_checkpoint_id"):
-                parent_config = {
-                    "configurable": {
-                        "thread_id": thread_id,
-                        "checkpoint_ns": checkpoint_ns,
-                        "checkpoint_id": parent_id,
-                    }
-                }
-
             return CheckpointTuple(
                 config={
                     "configurable": {
@@ -187,16 +161,28 @@ class AsyncDynamoDBSaver(BaseCheckpointSaver):
                         "checkpoint_id": checkpoint_item["checkpoint_id"],
                     }
                 },
-                checkpoint=checkpoint,
-                metadata=metadata,
-                parent_config=parent_config,
+                checkpoint=self.serde.loads_typed(
+                    (checkpoint_item["type"], checkpoint_item["checkpoint"])
+                ),
+                metadata=self.serde.loads_typed(
+                    (checkpoint_item["type"], checkpoint_item["metadata"])
+                ),
+                parent_config=(
+                    {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": checkpoint_ns,
+                            "checkpoint_id": checkpoint_item["parent_checkpoint_id"],
+                        }
+                    }
+                    if checkpoint_item.get("parent_checkpoint_id")
+                    else None
+                ),
                 pending_writes=pending_writes,
             )
 
         except ClientError as e:
-            raise DynamoDBCheckpointError(
-                f"Failed to get checkpoint: {e.response['Error']['Code']}"
-            ) from e
+            raise DynamoDBCheckpointError("Failed to get checkpoint") from e
 
     async def alist(
         self,
@@ -219,18 +205,18 @@ class AsyncDynamoDBSaver(BaseCheckpointSaver):
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
 
         try:
-            # Build query conditions
+            # Build query for checkpoints
             condition = Key("PK").eq(thread_id)
-            sk_prefix = f"{checkpoint_ns}#"
+            checkpoint_prefix = f"{checkpoint_ns}#checkpoint#"
 
             if before and (before_id := get_checkpoint_id(before)):
                 condition = condition & Key("SK").lt(
-                    f"{sk_prefix}{before_id}#checkpoint"
+                    f"{checkpoint_ns}#checkpoint#{before_id}"
                 )
 
             query_params = {
-                "KeyConditionExpression": condition & Key("SK").begins_with(sk_prefix),
-                "FilterExpression": Attr("SK").contains("#checkpoint"),
+                "KeyConditionExpression": condition
+                & Key("SK").begins_with(checkpoint_prefix),
                 "ScanIndexForward": False,
             }
 
@@ -249,7 +235,6 @@ class AsyncDynamoDBSaver(BaseCheckpointSaver):
                 try:
                     checkpoint_item = validate_checkpoint_item(item)
 
-                    # Apply metadata filter
                     if filter:
                         metadata = self.serde.loads_typed(
                             (checkpoint_item["type"], checkpoint_item["metadata"])
@@ -259,7 +244,7 @@ class AsyncDynamoDBSaver(BaseCheckpointSaver):
 
                     # Get writes for this checkpoint
                     write_prefix = (
-                        f"{checkpoint_ns}#{checkpoint_item['checkpoint_id']}#write#"
+                        f"{checkpoint_ns}#write#{checkpoint_item['checkpoint_id']}"
                     )
                     writes_response = await execute_with_retry(
                         lambda: self._table.query(
