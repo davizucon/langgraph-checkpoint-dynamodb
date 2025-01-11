@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DynamoDB table for LangGraph checkpoint storage'
+
+Parameters:
+  TableName:
+    Type: String
+    Default: langgraph-checkpoints
+    Description: Name of the DynamoDB table
+  
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Deployment environment
+
+Resources:
+  CheckpointTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PAY_PER_REQUEST  # On-demand capacity for flexibility
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true  # Enable server-side encryption
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LangGraph
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  TableName:
+    Description: Name of the DynamoDB table
+    Value: !Ref CheckpointTable
+    Export:
+      Name: !Sub ${AWS::StackName}-TableName
+  
+  TableArn:
+    Description: ARN of the DynamoDB table
+    Value: !GetAtt CheckpointTable.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-TableArn
