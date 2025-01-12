@@ -4,6 +4,7 @@ from typing import Any, AsyncIterator, Dict, Iterator, Optional, Sequence, Tuple
 import aioboto3
 import boto3
 from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.types import TypeSerializer
 from botocore.exceptions import ClientError
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
@@ -30,7 +31,6 @@ from .utils import (
     validate_checkpoint_item,
     validate_write_item,
 )
-from boto3.dynamodb.types import TypeSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -469,7 +469,9 @@ class DynamoDBSaver(BaseCheckpointSaver):
                         metadata = self.serde.loads_typed(
                             (
                                 checkpoint_item["type"],
-                                deserialize_dynamodb_binary(checkpoint_item["metadata"])
+                                deserialize_dynamodb_binary(
+                                    checkpoint_item["metadata"]
+                                ),
                             )
                         )
                         if not all(metadata.get(k) == v for k, v in filter.items()):
@@ -501,7 +503,10 @@ class DynamoDBSaver(BaseCheckpointSaver):
                             write["task_id"],
                             write["channel"],
                             self.serde.loads_typed(
-                                (write["type"], deserialize_dynamodb_binary(write["value"]))
+                                (
+                                    write["type"],
+                                    deserialize_dynamodb_binary(write["value"]),
+                                )
                             ),
                         )
                         for write in writes
@@ -518,13 +523,17 @@ class DynamoDBSaver(BaseCheckpointSaver):
                         checkpoint=self.serde.loads_typed(
                             (
                                 checkpoint_item["type"],
-                                deserialize_dynamodb_binary(checkpoint_item["checkpoint"])
+                                deserialize_dynamodb_binary(
+                                    checkpoint_item["checkpoint"]
+                                ),
                             )
                         ),
                         metadata=self.serde.loads_typed(
                             (
                                 checkpoint_item["type"],
-                                deserialize_dynamodb_binary(checkpoint_item["metadata"])
+                                deserialize_dynamodb_binary(
+                                    checkpoint_item["metadata"]
+                                ),
                             )
                         ),
                         parent_config=(
@@ -699,7 +708,7 @@ class DynamoDBSaver(BaseCheckpointSaver):
             writes_list = list(writes)
             # Create TypeSerializer instance
             serializer = TypeSerializer()
-            
+
             # Process writes in batches
             batch_size = 25  # DynamoDB batch write limit
             for i in range(0, len(writes_list), batch_size):
@@ -720,9 +729,11 @@ class DynamoDBSaver(BaseCheckpointSaver):
                         type_,
                         value_data,
                     )
-                    
+
                     # Convert item to DynamoDB format
-                    dynamodb_item = {k: serializer.serialize(v) for k, v in item.items()}
+                    dynamodb_item = {
+                        k: serializer.serialize(v) for k, v in item.items()
+                    }
                     batch_items.append({"PutRequest": {"Item": dynamodb_item}})
 
                 # Execute batch write with retry
@@ -758,13 +769,13 @@ class DynamoDBSaver(BaseCheckpointSaver):
         try:
             saver._create_or_update_table()
         except saver.client.exceptions.ResourceInUseException:
-            logger.info(f"Table {config.table_config.table_name} is being created by another process")
+            logger.info(
+                f"Table {config.table_config.table_name} is being created by another process"
+            )
         except Exception as e:
             logger.error(f"Failed to create or update table: {e}")
             raise DynamoDBCheckpointError("Failed to create or update table") from e
         return saver
-    
-    
 
     def _create_or_update_table(self) -> None:
         """Create or update DynamoDB table based on configuration."""
@@ -885,20 +896,22 @@ class DynamoDBSaver(BaseCheckpointSaver):
     def destroy(self) -> None:
         """
         Delete the DynamoDB table and clean up resources.
-        
+
         Raises:
             DynamoDBCheckpointError: If table deletion fails
         """
         try:
             # Delete the table
             self.client.delete_table(TableName=self.config.table_config.table_name)
-            
+
             # Wait for table to be deleted
-            waiter = self.client.get_waiter('table_not_exists')
+            waiter = self.client.get_waiter("table_not_exists")
             waiter.wait(TableName=self.config.table_config.table_name)
-            
-            logger.info(f"Table {self.config.table_config.table_name} deleted successfully")
-            
+
+            logger.info(
+                f"Table {self.config.table_config.table_name} deleted successfully"
+            )
+
         except self.client.exceptions.ResourceNotFoundException:
             logger.info(f"Table {self.config.table_config.table_name} does not exist")
         except ClientError as e:

@@ -8,7 +8,7 @@ from aws_cdk import (
 from constructs import Construct
 from typing import Optional
 
-from config import DynamoDBTableConfig
+from ..config import DynamoDBTableConfig
 
 class DynamoDBCheckpointStack(Stack):
     """CDK Stack for LangGraph Checkpoint DynamoDB infrastructure."""

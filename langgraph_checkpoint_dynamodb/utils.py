@@ -1,8 +1,8 @@
 import asyncio
 from typing import Any, Dict, Optional
 
-from botocore.exceptions import ClientError
 from boto3.dynamodb.types import Binary
+from botocore.exceptions import ClientError
 
 from .config import DynamoDBConfig
 from .constants import CheckpointItem, WriteItem

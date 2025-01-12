@@ -1,23 +1,40 @@
 # LangGraph DynamoDB Checkpoint
 
-A DynamoDB implementation of the LangGraph checkpointer interface for persisting graph state and enabling features like human-in-the-loop, memory, time travel, and fault tolerance. Support sync and async methods using efficient DynamoDB queries and custom table configuration.
+A single table DynamoDB implementation of the [LangGraph checkpointer interface](https://langchain-ai.github.io/langgraph/reference/checkpoints/#langgraph.checkpoint.base.BaseCheckpointSaver) for [persisting graph state](https://langchain-ai.github.io/langgraph/concepts/persistence/) and enabling features like human-in-the-loop, memory, time travel, and fault tolerance. Support sync and async methods with efficient DynamoDB queries and custom table configuration.
 
 ## Installation
 
+Basic installation:
 ```bash
 pip install langgraph-checkpoint-amazon-dynamodb
 ```
 
+With infrastructure components for AWS CDK Python:
+```bash
+pip install "langgraph-checkpoint-amazon-dynamodb[infra]"
+```
+
 ## Quick Start
 
+> **Note**: For the default configuration to work, you need to have the AWS credentials configured for your environment. See the [AWS Documentation](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html) for more details.
+
+Create the DynamoDB table and the checkpointer with default settings:
 ```python
 from langgraph_checkpoint_dynamodb import DynamoDBSaver
 
-# Create checkpointer with default settings
-checkpointer = DynamoDBSaver()
+# By default create a "langgraph-checkpoint" table if it doesn't exist
+checkpointer = DynamoDBSaver.create()
 
 # Use with your LangGraph
 graph = workflow.compile(checkpointer=checkpointer)
+```
+
+Using an existing table with default configuration:
+```python
+from langgraph_checkpoint_dynamodb import DynamoDBSaver
+
+# By default use the "langgraph-checkpoint" table
+checkpointer = DynamoDBSaver()
 ```
 
 For custom configuration:
@@ -27,11 +44,18 @@ from langgraph_checkpoint_dynamodb import DynamoDBSaver, DynamoDBConfig, DynamoD
 config = DynamoDBConfig(
     table_config=DynamoDBTableConfig(
         # Customize table name as needed
-        table_name="langgraph-checkpoint"
-    )
+        table_name="langgraph-checkpoint",
+    ),
+    # Optional AWS credentials (if not using default credentials)
+    aws_access_key_id="your-access-key-id",
+    aws_secret_access_key="your-secret-access-key",
+    aws_session_token="your-session-token"
 )
 
-checkpointer = DynamoDBSaver(config)
+# Create a table with custom configuration
+checkpointer = DynamoDBSaver.create(config)
+# Using an existing table with custom configuration
+# checkpointer = DynamoDBSaver(config)
 ```
 
 ## Configuration
@@ -101,41 +125,11 @@ config = DynamoDBConfig(...)
 # Create table
 checkpointer = DynamoDBSaver.create(config)
 
-# Reuse an existing table
-checkpointer = DynamoDBSaver(config)
-
 # Delete table when no longer needed
 checkpointer.destroy()
 ```
 
-### 2. Using AWS CDK
-
-For more advanced infrastructure management using AWS CDK:
-
-```python
-from aws_cdk import App
-from langgraph_checkpoint_dynamodb.infra import DynamoDBCheckpointStack
-from langgraph_checkpoint_dynamodb import DynamoDBTableConfig
-
-app = App()
-
-# Create the stack with custom configuration
-table_config = DynamoDBTableConfig(
-    table_name="langgraph-checkpoint",
-    enable_point_in_time_recovery=True,
-    enable_encryption=True
-)
-
-DynamoDBCheckpointStack(
-    app,
-    "LangGraphCheckpoint",
-    table_config=table_config
-)
-
-app.synth()
-```
-
-### 3. Using CloudFormation
+### 2. Using CloudFormation
 
 For simple deployments using CloudFormation:
 
@@ -183,6 +177,36 @@ aws cloudformation deploy \
   --parameter-overrides TableName=langgraph-checkpoint Environment=prod
 ```
 
+### 3. Using AWS CDK
+
+> **Note**: Requires installing the package with infrastructure support: `pip install "langgraph-checkpoint-amazon-dynamodb[infra]"`
+
+For more advanced infrastructure management using AWS CDK Python:
+
+```python
+from aws_cdk import App
+from langgraph_checkpoint_dynamodb.infra import DynamoDBCheckpointStack
+from langgraph_checkpoint_dynamodb import DynamoDBTableConfig
+
+app = App()
+
+# Create the stack with custom configuration
+table_config = DynamoDBTableConfig(
+    table_name="langgraph-checkpoint",
+    enable_point_in_time_recovery=True,
+    enable_encryption=True
+)
+
+DynamoDBCheckpointStack(
+    app,
+    "LangGraphCheckpoint",
+    table_config=table_config,
+    tags={"Environment": "prod", "Tenant": "tenant-1"},
+)
+
+app.synth()
+```
+
 ## Usage with LangGraph
 
 Once configured, use the DynamoDB checkpointer with your LangGraph workflow:
@@ -204,10 +228,14 @@ graph = workflow.compile(checkpointer=checkpointer)
 
 # Run with thread_id for persistence
 config = {"configurable": {"thread_id": "unique-thread-id"}}
-graph.invoke({"input": "value"}, config)
+graph.invoke({"messages": [{"type": "user", "content": "Hello!"}]}, config)
 
 # Run with async methods
-async for chunk in graph.astream({"input":  "value"}, config, stream_mode="values"):
+async for chunk in graph.astream(
+    {"messages": [{"type": "user", "content": "Hello!"}]},
+    config,
+    stream_mode="values",
+):
     chunk["messages"][-1].pretty_print()
 ```
 
@@ -219,7 +247,8 @@ The DynamoDB checkpointer enables all LangGraph persistence features:
 - **Memory**: Retain state between interactions in the same thread
 - **Time Travel**: Replay and debug specific graph steps
 - **Fault Tolerance**: Recover from failures and resume from last successful step
-- **Sync and Async**: Support sync and async methods using efficient DynamoDB KeyConditionExpressions for queries
+- **Sync and Async**: Support sync and async methods using efficient DynamoDB KeyConditionExpressions for cost-effective queries
+
 ## License
 
 MIT
