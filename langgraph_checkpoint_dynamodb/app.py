@@ -22,7 +22,7 @@ DynamoDBCheckpointStack(
 
 # Example 2: Provisioned capacity table
 # tenant_id = "default"
-# props = DynamoDBTableConfig(
+# config = DynamoDBTableConfig(
 #     table_name=f"langgraph-checkpoint-prod-{tenant_id}",
 #     billing_mode=cdk.aws_dynamodb.BillingMode.PROVISIONED,
 #     read_capacity=5,
@@ -39,7 +39,7 @@ DynamoDBCheckpointStack(
 #     "DynamoDBCheckpointStackProd",
 #     env={"region": "us-east-1"},
 #     tags={"Environment": "prod", "Tenant": tenant_id},
-#     table_props=props,
+#     table_config=config,
 # )
 
 app.synth()

@@ -4,7 +4,7 @@ Description: 'DynamoDB table for LangGraph checkpoint storage'
 Parameters:
   TableName:
     Type: String
-    Default: langgraph-checkpoints
+    Default: langgraph-checkpoint
     Description: Name of the DynamoDB table
   
   Environment:

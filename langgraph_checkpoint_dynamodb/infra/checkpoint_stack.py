@@ -17,13 +17,13 @@ class DynamoDBCheckpointStack(Stack):
         self,
         scope: Construct,
         id: str,
-        table_props: Optional[DynamoDBTableConfig] = None,
+        table_config: Optional[DynamoDBTableConfig] = None,
         **kwargs
     ) -> None:
         super().__init__(scope, id, **kwargs)
         
         # Use default props if none provided
-        self.props = table_props or DynamoDBTableConfig()
+        self.props = table_config or DynamoDBTableConfig()
         
         # Create the table
         self.table = self._create_table()
@@ -40,7 +40,7 @@ class DynamoDBCheckpointStack(Stack):
     
     def _create_table(self) -> dynamodb.Table:
         """Create the DynamoDB table with configured properties."""
-        table_props = {
+        table_config = {
             "table_name": self.props.table_name,
             "billing_mode": dynamodb.BillingMode(self.props.billing_mode),
             "partition_key": dynamodb.Attribute(
@@ -57,7 +57,7 @@ class DynamoDBCheckpointStack(Stack):
         
         # Add encryption if enabled
         if self.props.enable_encryption:
-            table_props["encryption"] = dynamodb.TableEncryption.AWS_MANAGED
+            table_config["encryption"] = dynamodb.TableEncryption.AWS_MANAGED
             
         # Add capacity if provisioned
         if dynamodb.BillingMode(self.props.billing_mode) == dynamodb.BillingMode.PROVISIONED:
@@ -65,11 +65,11 @@ class DynamoDBCheckpointStack(Stack):
                 raise ValueError(
                     "read_capacity and write_capacity required for PROVISIONED mode"
                 )
-            table_props["read_capacity"] = self.props.read_capacity
-            table_props["write_capacity"] = self.props.write_capacity
+            table_config["read_capacity"] = self.props.read_capacity
+            table_config["write_capacity"] = self.props.write_capacity
             
         # Create table
-        table = dynamodb.Table(self, "CheckpointTable", **table_props)
+        table = dynamodb.Table(self, "CheckpointTable", **table_config)
         
         # Enable TTL if configured
         if self.props.enable_ttl:
