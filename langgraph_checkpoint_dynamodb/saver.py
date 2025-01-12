@@ -740,19 +740,13 @@ class DynamoDBSaver(BaseCheckpointSaver):
     @classmethod
     def create(
         cls,
-        table_name: str,
-        region_name: str = "us-west-2",
-        endpoint_url: Optional[str] = None,
-        **kwargs: Any,
+        config: Optional[DynamoDBConfig] = None,
     ) -> "DynamoDBSaver":
         """
         Create a DynamoDBSaver instance and ensure table exists.
 
         Args:
-            table_name: Name of the DynamoDB table
-            region_name: AWS region name
-            endpoint_url: Optional endpoint URL for testing
-            **kwargs: Additional boto3 client configuration
+            config: DynamoDB configuration
 
         Returns:
             DynamoDBSaver instance with table created/updated
@@ -760,15 +754,17 @@ class DynamoDBSaver(BaseCheckpointSaver):
         Raises:
             DynamoDBCheckpointError: If table creation fails
         """
-        saver = cls(table_name, region_name, endpoint_url, **kwargs)
+        saver = cls(config)
         try:
             saver._create_or_update_table()
         except saver.client.exceptions.ResourceInUseException:
-            logger.info(f"Table {table_name} is being created by another process")
+            logger.info(f"Table {config.table_config.table_name} is being created by another process")
         except Exception as e:
             logger.error(f"Failed to create or update table: {e}")
             raise DynamoDBCheckpointError("Failed to create or update table") from e
         return saver
+    
+    
 
     def _create_or_update_table(self) -> None:
         """Create or update DynamoDB table based on configuration."""
@@ -885,3 +881,25 @@ class DynamoDBSaver(BaseCheckpointSaver):
             TableName=self.config.table_config.table_name,
             PointInTimeRecoverySpecification={"PointInTimeRecoveryEnabled": True},
         )
+
+    def destroy(self) -> None:
+        """
+        Delete the DynamoDB table and clean up resources.
+        
+        Raises:
+            DynamoDBCheckpointError: If table deletion fails
+        """
+        try:
+            # Delete the table
+            self.client.delete_table(TableName=self.config.table_config.table_name)
+            
+            # Wait for table to be deleted
+            waiter = self.client.get_waiter('table_not_exists')
+            waiter.wait(TableName=self.config.table_config.table_name)
+            
+            logger.info(f"Table {self.config.table_config.table_name} deleted successfully")
+            
+        except self.client.exceptions.ResourceNotFoundException:
+            logger.info(f"Table {self.config.table_config.table_name} does not exist")
+        except ClientError as e:
+            raise DynamoDBCheckpointError("Failed to delete table") from e
