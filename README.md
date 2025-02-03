@@ -18,26 +18,34 @@ pip install "langgraph-checkpoint-amazon-dynamodb[infra]"
 
 > **Note**: For the default configuration to work, you need to have the AWS credentials configured for your environment. See the [AWS Documentation](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html) for more details.
 
-Create the DynamoDB table and the checkpointer with default settings:
+Create the DynamoDB table and compile the checkpointer with default settings:
 ```python
+from langgraph.graph import END, START, MessageGraph
 from langgraph_checkpoint_dynamodb import DynamoDBSaver
 
-# By default create a "langgraph-checkpoint" table if it doesn't exist
-checkpointer = DynamoDBSaver.create()
+# Set deploy=True to create the table with default settings if it doesn't exist
+checkpointer = DynamoDBSaver(deploy=True)
 
-# Use with your LangGraph
+# Use with your LangGraph, below is a simple example
+workflow = MessageGraph()
+workflow.add_node("chatbot", lambda state: [{"role": "ai", "content": "Hello!"}])
+workflow.add_edge(START, "chatbot")
+workflow.add_edge("chatbot", END)
 graph = workflow.compile(checkpointer=checkpointer)
 ```
 
-Using an existing table with default configuration:
+Use a thread ID to retain state between invocations:
 ```python
-from langgraph_checkpoint_dynamodb import DynamoDBSaver
-
-# By default use the "langgraph-checkpoint" table
-checkpointer = DynamoDBSaver()
+config={"configurable": {"thread_id": "1"}}
+# Checkpoints will be saved with the configured thread_id as DynamoDB partition key
+print(graph.invoke([{"role": "human", "content": "Hi!"}], config))
+# Review last saved checkpoint
+print(graph.get_state(config))
 ```
 
-For custom configuration:
+## Configuration
+
+To customize the DynamoDB table or client configuration, use the `DynamoDBConfig` and `DynamoDBTableConfig` classes:
 ```python
 from langgraph_checkpoint_dynamodb import DynamoDBSaver, DynamoDBConfig, DynamoDBTableConfig
 
@@ -53,14 +61,13 @@ config = DynamoDBConfig(
 )
 
 # Create a table with custom configuration
-checkpointer = DynamoDBSaver.create(config)
+checkpointer = DynamoDBSaver(config, deploy=True)
+
 # Using an existing table with custom configuration
 # checkpointer = DynamoDBSaver(config)
 ```
 
-## Configuration
-
-### DynamoDB Table Configuration
+### DynamoDB Table Configuration Options
 
 The `DynamoDBTableConfig` class provides configuration options for the DynamoDB table:
 
@@ -87,7 +94,7 @@ table_config = DynamoDBTableConfig(
 )
 ```
 
-### DynamoDB Client Configuration
+### DynamoDB Client Configuration Options
 
 The `DynamoDBConfig` class provides configuration for the DynamoDB client:
 
@@ -123,7 +130,7 @@ from langgraph_checkpoint_dynamodb import DynamoDBSaver, DynamoDBConfig
 config = DynamoDBConfig(...)
 
 # Create table
-checkpointer = DynamoDBSaver.create(config)
+checkpointer = DynamoDBSaver(config, deploy=True)
 
 # Delete table when no longer needed
 checkpointer.destroy()
@@ -207,34 +214,35 @@ DynamoDBCheckpointStack(
 app.synth()
 ```
 
-## Usage with LangGraph
+## Example usage with LangGraph in production
 
-Once configured, use the DynamoDB checkpointer with your LangGraph workflow:
+In production, it's recommended to deploy the table independently and reference it in the `DynamoDBConfig` class (deploy=False):
 
 ```python
 from langgraph.graph import StateGraph
 from langgraph_checkpoint_dynamodb import DynamoDBSaver, DynamoDBConfig
 
-# Create your graph
-workflow = StateGraph()
-# ... configure your graph ...
-
-# Setup checkpointer
+# Use an existing table as checkpointer
 config = DynamoDBConfig(...)
 checkpointer = DynamoDBSaver(config)
+
+# Create your graph
+workflow = StateGraph(...)
+# ... configure your graph ...
 
 # Compile with checkpointer
 graph = workflow.compile(checkpointer=checkpointer)
 
-# Run with thread_id for persistence
-config = {"configurable": {"thread_id": "unique-thread-id"}}
+# Use thread_id for persistence
+config = {"configurable": {"thread_id": "<unique-thread-id>"}}
+
+# Run the graph and get the final output state
 graph.invoke({"messages": [{"type": "user", "content": "Hello!"}]}, config)
 
-# Run with async methods
+# Run with async methods and stream updates after every node
 async for chunk in graph.astream(
     {"messages": [{"type": "user", "content": "Hello!"}]},
-    config,
-    stream_mode="values",
+    config
 ):
     chunk["messages"][-1].pretty_print()
 ```

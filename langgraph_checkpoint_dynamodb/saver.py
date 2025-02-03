@@ -46,12 +46,14 @@ class DynamoDBSaver(BaseCheckpointSaver):
     def __init__(
         self,
         config: Optional[DynamoDBConfig] = None,
+        deploy: bool = False,
     ) -> None:
         """
         Initialize DynamoDB checkpoint saver.
 
         Args:
             config: DynamoDB configuration
+            deploy: If True, creates/updates the table. If False, only checks if table exists.
         """
         super().__init__()
         self.config = config or DynamoDBConfig()
@@ -66,6 +68,39 @@ class DynamoDBSaver(BaseCheckpointSaver):
         self._async_client = None
         self._async_resource = None
         self._async_table = None
+
+        # Handle table deployment/verification
+        region = self.client.meta.region_name
+        if deploy:
+            try:
+                self._create_or_update_table()
+            except self.client.exceptions.ResourceInUseException:
+                logger.info(
+                    f"Table {self.config.table_config.table_name} in region {region} is being created by another process"
+                )
+            except Exception as e:
+                logger.error(f"Failed to create or update table: {e}")
+                raise DynamoDBCheckpointError(
+                    f"Failed to create or update table in region {region}"
+                ) from e
+        else:
+            try:
+                self.client.describe_table(
+                    TableName=self.config.table_config.table_name
+                )
+                logger.info(
+                    f"Found table {self.config.table_config.table_name} in region {region}"
+                )
+            except self.client.exceptions.ResourceNotFoundException:
+                logger.error(
+                    f"Table {self.config.table_config.table_name} does not exist in region {region}."
+                )
+                raise DynamoDBCheckpointError(
+                    f"Table {self.config.table_config.table_name} does not exist in region {region}. Set deploy=True to create it."
+                )
+            except Exception as e:
+                logger.error(f"Error checking table: {e}")
+                raise DynamoDBCheckpointError(f"Failed to check table existence: {e}")
 
     async def _ensure_async_clients(self):
         """Ensure async clients are initialized."""
@@ -345,7 +380,12 @@ class DynamoDBSaver(BaseCheckpointSaver):
                     # Apply metadata filter if specified
                     if filter:
                         metadata = self.serde.loads_typed(
-                            (checkpoint_item["type"], checkpoint_item["metadata"])
+                            (
+                                checkpoint_item["type"],
+                                deserialize_dynamodb_binary(
+                                    checkpoint_item["metadata"]
+                                ),
+                            )
                         )
                         if not all(metadata.get(k) == v for k, v in filter.items()):
                             continue
@@ -371,7 +411,12 @@ class DynamoDBSaver(BaseCheckpointSaver):
                         (
                             write["task_id"],
                             write["channel"],
-                            self.serde.loads_typed((write["type"], write["value"])),
+                            self.serde.loads_typed(
+                                (
+                                    write["type"],
+                                    deserialize_dynamodb_binary(write["value"]),
+                                )
+                            ),
                         )
                         for write in writes
                     ]
@@ -385,10 +430,20 @@ class DynamoDBSaver(BaseCheckpointSaver):
                             }
                         },
                         checkpoint=self.serde.loads_typed(
-                            (checkpoint_item["type"], checkpoint_item["checkpoint"])
+                            (
+                                checkpoint_item["type"],
+                                deserialize_dynamodb_binary(
+                                    checkpoint_item["checkpoint"]
+                                ),
+                            )
                         ),
                         metadata=self.serde.loads_typed(
-                            (checkpoint_item["type"], checkpoint_item["metadata"])
+                            (
+                                checkpoint_item["type"],
+                                deserialize_dynamodb_binary(
+                                    checkpoint_item["metadata"]
+                                ),
+                            )
                         ),
                         parent_config=(
                             {
@@ -753,6 +808,21 @@ class DynamoDBSaver(BaseCheckpointSaver):
         cls,
         config: Optional[DynamoDBConfig] = None,
     ) -> "DynamoDBSaver":
+        """Deprecated: use deploy instead."""
+        import warnings
+
+        warnings.warn(
+            "create() is deprecated, use DynamoDBSaver(config, deploy=True) or DynamoDBSaver.deploy(config) instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return cls.deploy(config)
+
+    @classmethod
+    def deploy(
+        cls,
+        config: Optional[DynamoDBConfig] = None,
+    ) -> "DynamoDBSaver":
         """
         Create a DynamoDBSaver instance and ensure table exists.
 
@@ -765,16 +835,7 @@ class DynamoDBSaver(BaseCheckpointSaver):
         Raises:
             DynamoDBCheckpointError: If table creation fails
         """
-        saver = cls(config)
-        try:
-            saver._create_or_update_table()
-        except saver.client.exceptions.ResourceInUseException:
-            logger.info(
-                f"Table {config.table_config.table_name} is being created by another process"
-            )
-        except Exception as e:
-            logger.error(f"Failed to create or update table: {e}")
-            raise DynamoDBCheckpointError("Failed to create or update table") from e
+        saver = cls(config, deploy=True)
         return saver
 
     def _create_or_update_table(self) -> None:
@@ -797,7 +858,7 @@ class DynamoDBSaver(BaseCheckpointSaver):
                 existing_table.get("BillingModeSummary", {}).get("BillingMode")
                 != table_config.billing_mode
             ):
-                updates_needed.append(self._update_billing_mode())
+                updates_needed.append(self._update_billing_mode)
 
             # Check capacity if provisioned
             if table_config.billing_mode == BillingMode.PROVISIONED:
@@ -807,7 +868,7 @@ class DynamoDBSaver(BaseCheckpointSaver):
                     or current_capacity["WriteCapacityUnits"]
                     != table_config.write_capacity
                 ):
-                    updates_needed.append(self._update_capacity())
+                    updates_needed.append(self._update_capacity)
 
             # Check point-in-time recovery
             if table_config.enable_point_in_time_recovery:
@@ -817,7 +878,7 @@ class DynamoDBSaver(BaseCheckpointSaver):
                     "PointInTimeRecoveryStatus"
                 ]
                 if pitr_status != "ENABLED":
-                    updates_needed.append(self._enable_pitr())
+                    updates_needed.append(self._enable_pitr)
 
             # Execute updates if needed
             for update in updates_needed:
@@ -871,6 +932,10 @@ class DynamoDBSaver(BaseCheckpointSaver):
 
     def _update_billing_mode(self) -> None:
         """Update table billing mode."""
+
+        logger.info(
+            f"Updating table {self.config.table_config.table_name} billing mode to {self.config.table_config.billing_mode}"
+        )
         self.client.update_table(
             TableName=self.config.table_config.table_name,
             BillingMode=self.config.table_config.billing_mode,
@@ -878,6 +943,9 @@ class DynamoDBSaver(BaseCheckpointSaver):
 
     def _update_capacity(self) -> None:
         """Update provisioned capacity."""
+        logger.info(
+            f"Updating table {self.config.table_config.table_name} capacity to {self.config.table_config.read_capacity} read and {self.config.table_config.write_capacity} write"
+        )
         self.client.update_table(
             TableName=self.config.table_config.table_name,
             ProvisionedThroughput={
@@ -888,6 +956,9 @@ class DynamoDBSaver(BaseCheckpointSaver):
 
     def _enable_pitr(self) -> None:
         """Enable point-in-time recovery."""
+        logger.info(
+            f"Enabling point-in-time recovery for table {self.config.table_config.table_name}"
+        )
         self.client.update_continuous_backups(
             TableName=self.config.table_config.table_name,
             PointInTimeRecoverySpecification={"PointInTimeRecoveryEnabled": True},
