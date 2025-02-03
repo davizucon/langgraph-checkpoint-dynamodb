@@ -1,17 +1,11 @@
-# LangGraph DynamoDB Checkpoint
+# LangGraph Checkpoint DynamoDB
 
 A single table DynamoDB implementation of the [LangGraph checkpointer interface](https://langchain-ai.github.io/langgraph/reference/checkpoints/#langgraph.checkpoint.base.BaseCheckpointSaver) for [persisting graph state](https://langchain-ai.github.io/langgraph/concepts/persistence/) and enabling features like human-in-the-loop, memory, time travel, and fault tolerance. Support sync and async methods with efficient DynamoDB queries and custom table configuration.
 
 ## Installation
 
-Basic installation:
 ```bash
 pip install langgraph-checkpoint-amazon-dynamodb
-```
-
-With infrastructure components for AWS CDK Python:
-```bash
-pip install "langgraph-checkpoint-amazon-dynamodb[infra]"
 ```
 
 ## Quick Start
@@ -103,7 +97,7 @@ from langgraph_checkpoint_dynamodb import DynamoDBConfig
 
 config = DynamoDBConfig(
     table_config=table_config,  # DynamoDBTableConfig instance
-    region_name="us-west-2",  # AWS region
+    region_name="us-west-2",  # AWS region selection
     endpoint_url=None,  # Custom endpoint URL (e.g., for local DynamoDB)
     max_retries=3,  # Maximum number of retries
     initial_retry_delay=0.1,  # Initial retry delay in seconds
@@ -186,10 +180,13 @@ aws cloudformation deploy \
 
 ### 3. Using AWS CDK
 
-> **Note**: Requires installing the package with infrastructure support: `pip install "langgraph-checkpoint-amazon-dynamodb[infra]"`
+For more advanced infrastructure management using AWS CDK Python, install the `infra` optional dependency:
 
-For more advanced infrastructure management using AWS CDK Python:
+```bash
+pip install "langgraph-checkpoint-amazon-dynamodb[infra]"
+```
 
+Then import the `DynamoDBCheckpointStack` to your CDK app:
 ```python
 from aws_cdk import App
 from langgraph_checkpoint_dynamodb.infra import DynamoDBCheckpointStack

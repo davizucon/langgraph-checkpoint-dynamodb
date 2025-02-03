@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langgraph-checkpoint-amazon-dynamodb"
-version = "0.1.0"
+version = "0.1.1"
 authors = [
     { name = "Aaron Su", email = "supaaron@amazon.com" },
 ]

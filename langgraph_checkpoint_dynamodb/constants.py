@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import TypedDict, Union
+from typing import Optional, TypedDict, Union
 
 
 class ItemType(str, Enum):
@@ -18,7 +18,7 @@ class CheckpointItem(TypedDict):
     checkpoint_id: str
     checkpoint: str  # Serialized data
     metadata: str  # Serialized data
-    parent_checkpoint_id: str | None
+    parent_checkpoint_id: Optional[str]
 
 
 class WriteItem(TypedDict):
