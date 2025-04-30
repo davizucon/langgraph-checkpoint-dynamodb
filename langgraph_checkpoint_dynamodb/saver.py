@@ -1,5 +1,6 @@
 import logging
 from typing import Any, AsyncIterator, Dict, Iterator, Optional, Sequence, Tuple
+import time
 
 import aioboto3
 import boto3
@@ -24,6 +25,7 @@ from .errors import (
 )
 from .utils import (
     create_checkpoint_item,
+    create_ttl_filter,
     create_write_item,
     deserialize_dynamodb_binary,
     execute_with_retry,
@@ -137,13 +139,24 @@ class DynamoDBSaver(BaseCheckpointSaver):
                     return None
             else:
                 # Get latest checkpoint
-                response = self.table.query(
-                    KeyConditionExpression=Key("PK").eq(thread_id)
+                # Build query params with filter for non-expired items
+                query_params = {
+                    "KeyConditionExpression": Key("PK").eq(thread_id)
                     & Key("SK").begins_with(f"{checkpoint_ns}#checkpoint#"),
-                    ScanIndexForward=False,
-                    Limit=1,
-                    ConsistentRead=True,
-                )
+                    "ScanIndexForward": False,
+                    "Limit": 1,
+                    "ConsistentRead": True,
+                }
+
+                # Add filter for TTL if attribute is used
+                if self.config.table_config.ttl_days is not None:
+                    filter_expr, expr_values = create_ttl_filter(
+                        self.config.table_config.ttl_attribute
+                    )
+                    query_params["FilterExpression"] = filter_expr
+                    query_params["ExpressionAttributeValues"] = expr_values
+
+                response = self.table.query(**query_params)
                 if not response["Items"]:
                     return None
                 try:
@@ -154,10 +167,20 @@ class DynamoDBSaver(BaseCheckpointSaver):
 
             # Get writes for the checkpoint
             write_prefix = f"{checkpoint_ns}#write#{checkpoint_item['checkpoint_id']}"
-            writes_response = self.table.query(
-                KeyConditionExpression=Key("PK").eq(thread_id)
-                & Key("SK").begins_with(write_prefix)
-            )
+            writes_query_params = {
+                "KeyConditionExpression": Key("PK").eq(thread_id)
+                & Key("SK").begins_with(write_prefix),
+            }
+
+            # Add filter for TTL if attribute is used
+            if self.config.table_config.ttl_days is not None:
+                filter_expr, expr_values = create_ttl_filter(
+                    self.config.table_config.ttl_attribute
+                )
+                writes_query_params["FilterExpression"] = filter_expr
+                writes_query_params["ExpressionAttributeValues"] = expr_values
+
+            writes_response = self.table.query(**writes_query_params)
 
             writes = []
             for write_item in writes_response.get("Items", []):
@@ -248,14 +271,25 @@ class DynamoDBSaver(BaseCheckpointSaver):
                     return None
             else:
                 # Get latest checkpoint
+                # Build query params with filter for non-expired items
+                query_params = {
+                    "KeyConditionExpression": Key("PK").eq(thread_id)
+                    & Key("SK").begins_with(f"{checkpoint_ns}#checkpoint#"),
+                    "ScanIndexForward": False,
+                    "Limit": 1,
+                    "ConsistentRead": True,
+                }
+
+                # Add filter for TTL if attribute is used
+                if self.config.table_config.ttl_days is not None:
+                    filter_expr, expr_values = create_ttl_filter(
+                        self.config.table_config.ttl_attribute
+                    )
+                    query_params["FilterExpression"] = filter_expr
+                    query_params["ExpressionAttributeValues"] = expr_values
+
                 response = await execute_with_retry(
-                    lambda: self._async_table.query(
-                        KeyConditionExpression=Key("PK").eq(thread_id)
-                        & Key("SK").begins_with(f"{checkpoint_ns}#checkpoint#"),
-                        ScanIndexForward=False,
-                        Limit=1,
-                        ConsistentRead=True,
-                    ),
+                    lambda: self._async_table.query(**query_params),
                     self.config,
                     "Failed to get latest checkpoint",
                 )
@@ -269,11 +303,21 @@ class DynamoDBSaver(BaseCheckpointSaver):
 
             # Get writes for the checkpoint
             write_prefix = f"{checkpoint_ns}#write#{checkpoint_item['checkpoint_id']}"
+            writes_query_params = {
+                "KeyConditionExpression": Key("PK").eq(thread_id)
+                & Key("SK").begins_with(write_prefix),
+            }
+
+            # Add filter for TTL if attribute is used
+            if self.config.table_config.ttl_days is not None:
+                filter_expr, expr_values = create_ttl_filter(
+                    self.config.table_config.ttl_attribute
+                )
+                writes_query_params["FilterExpression"] = filter_expr
+                writes_query_params["ExpressionAttributeValues"] = expr_values
+
             writes_response = await execute_with_retry(
-                lambda: self._async_table.query(
-                    KeyConditionExpression=Key("PK").eq(thread_id)
-                    & Key("SK").begins_with(write_prefix)
-                ),
+                lambda: self._async_table.query(**writes_query_params),
                 self.config,
                 "Failed to get writes",
             )
@@ -369,6 +413,14 @@ class DynamoDBSaver(BaseCheckpointSaver):
             if limit:
                 query_params["Limit"] = limit
 
+            # Add filter for TTL if attribute is used
+            if self.config.table_config.ttl_days is not None:
+                filter_expr, expr_values = create_ttl_filter(
+                    self.config.table_config.ttl_attribute
+                )
+                query_params["FilterExpression"] = filter_expr
+                query_params["ExpressionAttributeValues"] = expr_values
+
             response = self.table.query(**query_params)
             items = response.get("Items", [])
 
@@ -394,10 +446,20 @@ class DynamoDBSaver(BaseCheckpointSaver):
                     write_prefix = (
                         f"{checkpoint_ns}#write#{checkpoint_item['checkpoint_id']}"
                     )
-                    writes_response = self.table.query(
-                        KeyConditionExpression=Key("PK").eq(thread_id)
+                    writes_query_params = {
+                        "KeyConditionExpression": Key("PK").eq(thread_id)
                         & Key("SK").begins_with(write_prefix)
-                    )
+                    }
+
+                    # Add filter for TTL if attribute is used
+                    if self.config.table_config.ttl_days is not None:
+                        filter_expr, expr_values = create_ttl_filter(
+                            self.config.table_config.ttl_attribute
+                        )
+                        writes_query_params["FilterExpression"] = filter_expr
+                        writes_query_params["ExpressionAttributeValues"] = expr_values
+
+                    writes_response = self.table.query(**writes_query_params)
 
                     writes = []
                     for write_item in writes_response.get("Items", []):
@@ -508,6 +570,14 @@ class DynamoDBSaver(BaseCheckpointSaver):
             if limit:
                 query_params["Limit"] = limit
 
+            # Add filter for TTL if attribute is used
+            if self.config.table_config.ttl_days is not None:
+                filter_expr, expr_values = create_ttl_filter(
+                    self.config.table_config.ttl_attribute
+                )
+                query_params["FilterExpression"] = filter_expr
+                query_params["ExpressionAttributeValues"] = expr_values
+
             response = await execute_with_retry(
                 lambda: self._async_table.query(**query_params),
                 self.config,
@@ -536,11 +606,21 @@ class DynamoDBSaver(BaseCheckpointSaver):
                     write_prefix = (
                         f"{checkpoint_ns}#write#{checkpoint_item['checkpoint_id']}"
                     )
+                    writes_query_params = {
+                        "KeyConditionExpression": Key("PK").eq(thread_id)
+                        & Key("SK").begins_with(write_prefix)
+                    }
+
+                    # Add filter for TTL if attribute is used
+                    if self.config.table_config.ttl_days is not None:
+                        filter_expr, expr_values = create_ttl_filter(
+                            self.config.table_config.ttl_attribute
+                        )
+                        writes_query_params["FilterExpression"] = filter_expr
+                        writes_query_params["ExpressionAttributeValues"] = expr_values
+
                     writes_response = await execute_with_retry(
-                        lambda: self._async_table.query(
-                            KeyConditionExpression=Key("PK").eq(thread_id)
-                            & Key("SK").begins_with(write_prefix)
-                        ),
+                        lambda: self._async_table.query(**writes_query_params),
                         self.config,
                         "Failed to get writes",
                     )
@@ -639,6 +719,8 @@ class DynamoDBSaver(BaseCheckpointSaver):
             checkpoint_data,
             metadata_data,
             config["configurable"].get("checkpoint_id"),
+            self.config.table_config.ttl_days,
+            self.config.table_config.ttl_attribute,
         )
 
         try:
@@ -684,6 +766,8 @@ class DynamoDBSaver(BaseCheckpointSaver):
             checkpoint_data,
             metadata_data,
             config["configurable"].get("checkpoint_id"),
+            self.config.table_config.ttl_days,
+            self.config.table_config.ttl_attribute,
         )
 
         try:
@@ -734,6 +818,8 @@ class DynamoDBSaver(BaseCheckpointSaver):
                         channel,
                         type_,
                         value_data,
+                        self.config.table_config.ttl_days,
+                        self.config.table_config.ttl_attribute,
                     )
 
                     batch.put_item(Item=item)
@@ -783,6 +869,8 @@ class DynamoDBSaver(BaseCheckpointSaver):
                         channel,
                         type_,
                         value_data,
+                        self.config.table_config.ttl_days,
+                        self.config.table_config.ttl_attribute,
                     )
 
                     # Convert item to DynamoDB format
@@ -880,6 +968,14 @@ class DynamoDBSaver(BaseCheckpointSaver):
                 if pitr_status != "ENABLED":
                     updates_needed.append(self._enable_pitr)
 
+            # Check TTL configuration
+            if table_config.ttl_days is not None:
+                ttl_status = self.client.describe_time_to_live(
+                    TableName=table_config.table_name
+                )["TimeToLiveDescription"]["TimeToLiveStatus"]
+                if ttl_status != "ENABLED":
+                    updates_needed.append(self._enable_ttl)
+
             # Execute updates if needed
             for update in updates_needed:
                 update()
@@ -919,14 +1015,8 @@ class DynamoDBSaver(BaseCheckpointSaver):
                 self._enable_pitr()
 
             # Enable TTL if configured
-            if table_config.enable_ttl:
-                self.client.update_time_to_live(
-                    TableName=table_config.table_name,
-                    TimeToLiveSpecification={
-                        "Enabled": True,
-                        "AttributeName": table_config.ttl_attribute,
-                    },
-                )
+            if table_config.ttl_days is not None:
+                self._enable_ttl()
 
             logger.info(f"Table {table_config.table_name} created")
 
@@ -963,6 +1053,98 @@ class DynamoDBSaver(BaseCheckpointSaver):
             TableName=self.config.table_config.table_name,
             PointInTimeRecoverySpecification={"PointInTimeRecoveryEnabled": True},
         )
+
+    def _enable_ttl(self) -> None:
+        """Enable TTL for the table and update existing items."""
+        logger.info(
+            f"Enabling TTL for table {self.config.table_config.table_name} with duration {self.config.table_config.ttl_days} days"
+        )
+
+        # First enable TTL on the table
+        self.client.update_time_to_live(
+            TableName=self.config.table_config.table_name,
+            TimeToLiveSpecification={
+                "Enabled": True,
+                "AttributeName": self.config.table_config.ttl_attribute,
+            },
+        )
+
+        # Then update existing items with TTL, but only those without the TTL attribute
+        if self.config.table_config.ttl_days is not None:
+            logger.info("Updating existing items that don't have TTL attribute...")
+            expiration_time = int(time.time()) + (
+                self.config.table_config.ttl_days * 24 * 60 * 60
+            )
+            ttl_attr = self.config.table_config.ttl_attribute
+            batch_size = 25  # DynamoDB batch write limit
+
+            # Function to process items in batches
+            def process_items_in_batches(scan_filter, item_type):
+                total_updated = 0
+                last_evaluated_key = None
+
+                while True:
+                    # Prepare scan parameters
+                    scan_params = {
+                        "FilterExpression": scan_filter,
+                        "ExpressionAttributeNames": {"#ttl": ttl_attr},
+                        "ExpressionAttributeValues": {":prefix": f"#{item_type}#"},
+                    }
+
+                    if last_evaluated_key:
+                        scan_params["ExclusiveStartKey"] = last_evaluated_key
+
+                    # Scan for items without TTL attribute
+                    response = self.table.scan(**scan_params)
+                    items = response.get("Items", [])
+
+                    # Process items in smaller batches to avoid throughput issues
+                    items_to_update = []
+                    for item in items:
+                        items_to_update.append(item)
+
+                        if len(items_to_update) >= batch_size:
+                            self._batch_update_ttl(
+                                items_to_update, ttl_attr, expiration_time
+                            )
+                            total_updated += len(items_to_update)
+                            items_to_update = []
+
+                    # Process any remaining items
+                    if items_to_update:
+                        self._batch_update_ttl(
+                            items_to_update, ttl_attr, expiration_time
+                        )
+                        total_updated += len(items_to_update)
+
+                    # Check if we need to continue scanning
+                    last_evaluated_key = response.get("LastEvaluatedKey")
+                    if not last_evaluated_key:
+                        break
+
+                return total_updated
+
+            # Process checkpoints and writes separately
+            checkpoint_filter = (
+                "begins_with(SK, :prefix) AND attribute_not_exists(#ttl)"
+            )
+            checkpoint_updated = process_items_in_batches(
+                checkpoint_filter, "checkpoint"
+            )
+
+            write_filter = "begins_with(SK, :prefix) AND attribute_not_exists(#ttl)"
+            write_updated = process_items_in_batches(write_filter, "write")
+
+            logger.info(
+                f"Updated {checkpoint_updated} checkpoints and {write_updated} writes with TTL attribute"
+            )
+
+    def _batch_update_ttl(self, items, ttl_attr, expiration_time):
+        """Helper to update TTL attribute on a batch of items."""
+        with self.table.batch_writer() as batch:
+            for item in items:
+                updated_item = {**item, ttl_attr: expiration_time}
+                batch.put_item(Item=updated_item)
 
     def destroy(self) -> None:
         """

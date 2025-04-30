@@ -73,8 +73,8 @@ table_config = DynamoDBTableConfig(
     billing_mode=BillingMode.PAY_PER_REQUEST,  # PAY_PER_REQUEST or PROVISIONED
     enable_encryption=True,  # Enable server-side encryption
     enable_point_in_time_recovery=False,  # Enable point-in-time recovery
-    enable_ttl=False,  # Enable TTL for items
-    ttl_attribute="ttl",  # TTL attribute name
+    ttl_days=30,  # Enable TTL with 30 days expiration (set to None to disable)
+    ttl_attribute="expireAt",  # TTL attribute name
     
     # For PROVISIONED billing mode only:
     read_capacity=None,  # Provisioned read capacity units

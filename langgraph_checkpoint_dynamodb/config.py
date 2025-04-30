@@ -16,8 +16,10 @@ class DynamoDBTableConfig:
     billing_mode: BillingMode = BillingMode.PAY_PER_REQUEST
     enable_encryption: bool = True
     enable_point_in_time_recovery: bool = False
-    enable_ttl: bool = False
-    ttl_attribute: str = "ttl"
+
+    # CAUTION: once TTL is enabled, attribute will be added to all items without it
+    ttl_attribute: str = "expireAt"
+    ttl_days: Optional[int] = None  # set a positive number to enable TTL
 
     # For provisioned capacity mode
     read_capacity: Optional[int] = None
@@ -36,6 +38,9 @@ class DynamoDBTableConfig:
                 raise ValueError(
                     "read_capacity and write_capacity required for PROVISIONED mode"
                 )
+
+        if self.ttl_days is not None and self.ttl_days <= 0:
+            raise ValueError("ttl_days must be positive when specified")
 
 
 @dataclass

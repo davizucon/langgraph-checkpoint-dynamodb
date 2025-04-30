@@ -1,17 +1,19 @@
+import operator
+
 import pytest
-from moto import mock_aws
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import CheckpointTuple
+from langgraph.graph import END, START, MessageGraph, StateGraph
+from moto import mock_aws
+from typing_extensions import Annotated, TypedDict
+
 from langgraph_checkpoint_dynamodb import (
+    DynamoDBConfig,
     DynamoDBSaver,
     DynamoDBTableConfig,
-    DynamoDBConfig,
 )
 from langgraph_checkpoint_dynamodb.config import BillingMode
-from langgraph.graph import END, START, MessageGraph, StateGraph
-from typing_extensions import Annotated, TypedDict
-import operator
 
 # Configure pytest-asyncio to use function scope for event loops
 pytest.mark.asyncio.loop_scope = "function"
